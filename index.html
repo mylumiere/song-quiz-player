@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>🎵 노래퀴즈</title>
+<!--
+  노래퀴즈 공개 플레이어 (정적 단일 파일)
+  - 모든 데이터는 URL로만 전달: #s=<base64url(공개 음원 URL)>&m=step|radio|full&t0=<epoch>&api=<선택>
+  - 서버·저장소·쿠키·외부 스크립트 없음. 음원은 iTunes 공개 프리뷰를 브라우저가 직접 스트리밍.
+-->
+<style>
+  :root { --bg:#14120d; --line:#3a3520; --accent:#fee500; --ink:#f5f2e8; --muted:#9a9482; }
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+  body { background:var(--bg); color:var(--ink); min-height:100vh;
+         font-family:-apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;
+         display:flex; flex-direction:column; align-items:center; justify-content:center; gap:22px; padding:24px; }
+  h1 { font-size:18px; font-weight:800; }
+  .sub { font-size:12.5px; color:var(--muted); margin-top:6px; text-align:center; line-height:1.6; }
+  .sub b { color:var(--ink); }
+  .ring { position:relative; width:170px; height:170px; border:none; background:none; cursor:pointer; }
+  .ring svg { position:absolute; inset:0; transform:rotate(-90deg); }
+  .track { stroke:var(--line); } .bar { stroke:var(--accent); stroke-linecap:round; }
+  .core { position:absolute; inset:19px; border-radius:50%; background:var(--accent); color:#191600;
+          display:flex; align-items:center; justify-content:center; font-size:48px; transition:transform .15s; }
+  .ring:active .core { transform:scale(.94); }
+  .count { font-size:14px; color:var(--muted); min-height:20px; font-variant-numeric:tabular-nums; }
+  .count strong { color:var(--ink); }
+  .stages { display:flex; gap:8px; align-items:center; }
+  .stage { font-size:13px; font-weight:700; padding:8px 13px; border-radius:999px;
+           border:1px solid var(--line); color:var(--muted); background:#221f13; }
+  .stage.cur { border-color:var(--accent); color:var(--accent); background:rgba(254,229,0,.08); }
+  .stage.lock { opacity:.45; }
+  .more { font-family:inherit; font-size:14px; font-weight:700; color:#191600; background:var(--accent);
+          border:none; border-radius:12px; padding:12px 20px; cursor:pointer; }
+  .more:disabled { opacity:.4; }
+  .pts { font-size:13px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .pts b { color:var(--accent); font-size:17px; }
+  .guess { display:flex; gap:8px; width:100%; max-width:340px; }
+  .guess input { flex:1; font-family:inherit; font-size:15px; color:var(--ink); background:#221f13;
+                 border:1px solid var(--line); border-radius:12px; padding:12px 14px; min-width:0; }
+  .guess input:focus { outline:none; border-color:var(--accent); }
+  .guess button { font-family:inherit; font-size:14px; font-weight:800; color:#191600; background:var(--accent);
+                  border:none; border-radius:12px; padding:12px 18px; cursor:pointer; white-space:nowrap; }
+  .verdict { font-size:14px; font-weight:700; min-height:20px; }
+  .verdict.ok { color:#7adb8f; } .verdict.no { color:#e08b8b; }
+  .foot { font-size:11.5px; color:var(--muted); text-align:center; line-height:1.7; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+  <div style="text-align:center">
+    <h1 id="title">🎵 노래퀴즈</h1>
+    <div class="sub" id="subtitle"></div>
+  </div>
+
+  <button class="ring" id="btn" aria-label="재생">
+    <svg viewBox="0 0 170 170" width="170" height="170" aria-hidden="true">
+      <circle class="track" cx="85" cy="85" r="79" fill="none" stroke-width="6"></circle>
+      <circle class="bar" id="bar" cx="85" cy="85" r="79" fill="none" stroke-width="6"
+              stroke-dasharray="496.4" stroke-dashoffset="496.4"></circle>
+    </svg>
+    <span class="core" id="core">▶</span>
+  </button>
+  <div class="count" id="count">버튼을 눌러 재생</div>
+
+  <div class="stages hidden" id="stages"></div>
+  <button class="more hidden" id="more"></button>
+  <div class="pts hidden" id="pts"></div>
+
+  <div class="guess hidden" id="guessBox">
+    <input id="ans" type="text" placeholder="노래 제목 입력" autocomplete="off" enterkeyhint="send">
+    <button id="send">정답!</button>
+  </div>
+  <div class="verdict" id="verdict"></div>
+
+  <div class="foot" id="foot">정답은 채팅방의 [✍️ 정답 입력] 버튼으로!</div>
+
+<script>
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var qs = new URLSearchParams(location.search);           // 카톡이 자동으로 붙이는 botGroupKey/botUserKey
+  var fr = new URLSearchParams(location.hash.slice(1));    // 봇이 넣는 데이터
+
+  function b64urlDecode(s) {
+    s = s.replace(/-/g, "+").replace(/_/g, "/");
+    while (s.length % 4) s += "=";
+    return atob(s);
+  }
+
+  var SRC = "";
+  try { SRC = b64urlDecode(fr.get("s") || ""); } catch (e) {}
+  var MODE = fr.get("m") || "full";
+  var T0 = parseInt(fr.get("t0") || "0", 10);
+  var API = fr.get("api") || "";
+  var GID = fr.get("gid") || "", RIDX = fr.get("r") || "";
+
+  if (!SRC || !/^https:\/\/[^ ]+\.(m4a|mp3|aac)([?#].*)?$/i.test(SRC)) {
+    $("count").textContent = "잘못된 링크입니다";
+    throw new Error("bad src");
+  }
+
+  var audio = new Audio(SRC);
+  audio.preload = "auto";
+  var raf = null, playing = false, curStart = 0, curDur = 30;
+  var CIRC = 496.4;
+
+  function stop() {
+    audio.pause(); playing = false;
+    if (raf) cancelAnimationFrame(raf);
+    $("core").textContent = "▶";
+    $("bar").style.strokeDashoffset = CIRC;
+  }
+  function tick() {
+    if (!playing) return;
+    var elapsed = audio.currentTime - curStart;
+    var left = Math.max(0, curDur - elapsed);
+    $("count").innerHTML = "<strong>" + left.toFixed(1) + "초</strong> 남음";
+    $("bar").style.strokeDashoffset = CIRC * (left / curDur);
+    if (elapsed >= curDur || audio.ended) { stop(); $("count").textContent = "다시 듣거나 정답을 외치세요!"; return; }
+    raf = requestAnimationFrame(tick);
+  }
+  function playSeg(start, dur) {
+    stop();
+    curStart = start; curDur = dur;
+    audio.currentTime = start;
+    var p = audio.play();
+    if (p && p.then) p.then(function () {
+      playing = true; $("core").textContent = "❚❚"; raf = requestAnimationFrame(tick);
+    }).catch(function (e) { $("count").textContent = "재생 실패: " + e.name; });
+  }
+
+  // ── 모드별 UI ──
+  if (MODE === "step") {
+    $("title").textContent = "⚡ 1초 챌린지";
+    $("subtitle").innerHTML = "짧게 듣고 빨리 맞힐수록 고득점!<br><b>시간이 흐르면 점수가 내려가요</b>";
+    $("stages").classList.remove("hidden");
+    $("more").classList.remove("hidden");
+    $("pts").classList.remove("hidden");
+    var STAGES = [1, 3, 7, 15];
+    var unlocked = 0;
+    function render() {
+      var el = $("stages"); el.innerHTML = "";
+      for (var i = 0; i < STAGES.length; i++) {
+        var d = document.createElement("span");
+        d.className = "stage" + (i === unlocked ? " cur" : (i > unlocked ? " lock" : ""));
+        d.textContent = (i > unlocked ? "🔒" : "") + STAGES[i] + "초";
+        el.appendChild(d);
+      }
+      var more = $("more");
+      if (unlocked >= STAGES.length - 1) { more.disabled = true; more.textContent = "최대 길이입니다"; }
+      else more.textContent = "🔓 더 듣기 (" + STAGES[unlocked + 1] + "초)";
+    }
+    $("btn").addEventListener("click", function () {
+      if (playing) { stop(); $("count").textContent = "일시정지"; return; }
+      playSeg(0, STAGES[unlocked]);
+    });
+    $("more").addEventListener("click", function () {
+      if (unlocked >= STAGES.length - 1) return;
+      unlocked++; render(); playSeg(0, STAGES[unlocked]);
+    });
+    render();
+    // 응답 속도 점수 실시간 표시 (판정은 서버 기준)
+    var SCHEDULE = [[15, 4], [30, 3], [50, 2]];
+    setInterval(function () {
+      if (!T0) return;
+      var el = Math.max(0, Math.floor(Date.now() / 1000 - T0));
+      var pts = 1;
+      for (var i = 0; i < SCHEDULE.length; i++) if (el <= SCHEDULE[i][0]) { pts = SCHEDULE[i][1]; break; }
+      $("pts").innerHTML = "지금 맞히면 <b>" + pts + "점</b> · 경과 " + el + "초";
+    }, 500);
+  } else if (MODE === "radio") {
+    $("title").textContent = "📻 라디오 모드";
+    $("subtitle").innerHTML = "틀어놓고 맞히세요!<br><b>초성 힌트는 채팅방에</b> 떠요 (빠를수록 고득점)";
+    $("btn").addEventListener("click", function () {
+      if (playing) { stop(); $("count").textContent = "일시정지"; return; }
+      playSeg(0, 30);
+    });
+  } else {
+    $("title").textContent = "🎵 다시 듣기";
+    $("subtitle").textContent = "30초 프리뷰 전체 재생";
+    $("btn").addEventListener("click", function () {
+      if (playing) { stop(); $("count").textContent = "일시정지"; return; }
+      playSeg(0, 30);
+    });
+  }
+
+  // ── 정답 입력창: API(사내망) 도달 가능할 때만 노출 ──
+  if (API && MODE !== "full") {
+    fetch(API + "/health", { signal: AbortSignal.timeout ? AbortSignal.timeout(3000) : undefined })
+      .then(function (r) { if (r.ok) $("guessBox").classList.remove("hidden"); })
+      .catch(function () { /* 사내망 밖 — 채팅 ✍️ 버튼 안내 유지 */ });
+    function submitGuess() {
+      var v = $("ans").value.trim();
+      if (!v) return;
+      $("send").disabled = true;
+      var p = new URLSearchParams({
+        text: v, r: RIDX, gid: GID,
+        botGroupKey: qs.get("botGroupKey") || "", botUserKey: qs.get("botUserKey") || "",
+      });
+      fetch(API + "/guess?" + p.toString())
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          var el = $("verdict");
+          if (j.correct) { el.textContent = "🎉 정답! 채팅방을 확인하세요"; el.className = "verdict ok"; $("ans").disabled = true; }
+          else if (j.over) { el.textContent = "이미 끝난 라운드예요"; el.className = "verdict no"; $("send").disabled = false; }
+          else { el.textContent = "❌ 땡! 다시 도전"; el.className = "verdict no"; $("ans").value = ""; $("send").disabled = false; }
+        })
+        .catch(function () { $("verdict").textContent = "전송 실패 — 채팅 ✍️ 버튼으로!"; $("send").disabled = false; });
+    }
+    $("send").addEventListener("click", submitGuess);
+    $("ans").addEventListener("keydown", function (e) { if (e.key === "Enter") submitGuess(); });
+  }
+</script>
+</body>
+</html>
