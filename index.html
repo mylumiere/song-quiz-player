@@ -5,9 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
 <title>🎵 노래퀴즈</title>
 <!--
-  노래퀴즈 공개 플레이어 (정적 단일 파일)
-  - 모든 데이터는 URL로만 전달: #s=<base64url(공개 음원 URL)>&m=step|radio|full&t0=<epoch>&api=<선택>
+  노래퀴즈 공개 플레이어 (정적 단일 파일, 재생 전용)
+  - 모든 데이터는 URL fragment로만 전달: #s=<base64url(공개 음원 URL)>&m=step|radio|full&t0=<epoch>
   - 서버·저장소·쿠키·외부 스크립트 없음. 음원은 iTunes 공개 프리뷰를 브라우저가 직접 스트리밍.
+  - 정답 제출은 채팅방의 [✍️ 정답 입력] 멘션 버튼으로.
 -->
 <style>
   :root { --bg:#14120d; --line:#3a3520; --accent:#fee500; --ink:#f5f2e8; --muted:#9a9482; }
@@ -36,14 +37,6 @@
   .more:disabled { opacity:.4; }
   .pts { font-size:13px; color:var(--muted); font-variant-numeric:tabular-nums; }
   .pts b { color:var(--accent); font-size:17px; }
-  .guess { display:flex; gap:8px; width:100%; max-width:340px; }
-  .guess input { flex:1; font-family:inherit; font-size:15px; color:var(--ink); background:#221f13;
-                 border:1px solid var(--line); border-radius:12px; padding:12px 14px; min-width:0; }
-  .guess input:focus { outline:none; border-color:var(--accent); }
-  .guess button { font-family:inherit; font-size:14px; font-weight:800; color:#191600; background:var(--accent);
-                  border:none; border-radius:12px; padding:12px 18px; cursor:pointer; white-space:nowrap; }
-  .verdict { font-size:14px; font-weight:700; min-height:20px; }
-  .verdict.ok { color:#7adb8f; } .verdict.no { color:#e08b8b; }
   .foot { font-size:11.5px; color:var(--muted); text-align:center; line-height:1.7; }
   .hidden { display:none !important; }
 </style>
@@ -68,19 +61,13 @@
   <button class="more hidden" id="more"></button>
   <div class="pts hidden" id="pts"></div>
 
-  <div class="guess hidden" id="guessBox">
-    <input id="ans" type="text" placeholder="노래 제목 입력" autocomplete="off" enterkeyhint="send">
-    <button id="send">정답!</button>
-  </div>
-  <div class="verdict" id="verdict"></div>
-
   <div class="foot" id="foot">정답은 채팅방의 [✍️ 정답 입력] 버튼으로!</div>
 
 <script>
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
-  var qs = new URLSearchParams(location.search);           // 카톡이 자동으로 붙이는 botGroupKey/botUserKey
-  var fr = new URLSearchParams(location.hash.slice(1));    // 봇이 넣는 데이터
+  // 카톡이 자동 쿼리를 fragment 뒤에 붙여도 파싱되도록 '?'를 '&'로 정규화 (봇이 넣는 값은 전부 %-인코딩)
+  var fr = new URLSearchParams(location.hash.slice(1).replace(/\?/g, "&"));
 
   function b64urlDecode(s) {
     s = s.replace(/-/g, "+").replace(/_/g, "/");
@@ -92,8 +79,6 @@
   try { SRC = b64urlDecode(fr.get("s") || ""); } catch (e) {}
   var MODE = fr.get("m") || "full";
   var T0 = parseInt(fr.get("t0") || "0", 10);
-  var API = fr.get("api") || "";
-  var GID = fr.get("gid") || "", RIDX = fr.get("r") || "";
 
   if (!SRC || !/^https:\/\/[^ ]+\.(m4a|mp3|aac)([?#].*)?$/i.test(SRC)) {
     $("count").textContent = "잘못된 링크입니다";
@@ -185,32 +170,6 @@
     });
   }
 
-  // ── 정답 입력창: API(사내망) 도달 가능할 때만 노출 ──
-  if (API && MODE !== "full") {
-    fetch(API + "/health", { signal: AbortSignal.timeout ? AbortSignal.timeout(3000) : undefined })
-      .then(function (r) { if (r.ok) $("guessBox").classList.remove("hidden"); })
-      .catch(function () { /* 사내망 밖 — 채팅 ✍️ 버튼 안내 유지 */ });
-    function submitGuess() {
-      var v = $("ans").value.trim();
-      if (!v) return;
-      $("send").disabled = true;
-      var p = new URLSearchParams({
-        text: v, r: RIDX, gid: GID,
-        botGroupKey: qs.get("botGroupKey") || "", botUserKey: qs.get("botUserKey") || "",
-      });
-      fetch(API + "/guess?" + p.toString())
-        .then(function (r) { return r.json(); })
-        .then(function (j) {
-          var el = $("verdict");
-          if (j.correct) { el.textContent = "🎉 정답! 채팅방을 확인하세요"; el.className = "verdict ok"; $("ans").disabled = true; }
-          else if (j.over) { el.textContent = "이미 끝난 라운드예요"; el.className = "verdict no"; $("send").disabled = false; }
-          else { el.textContent = "❌ 땡! 다시 도전"; el.className = "verdict no"; $("ans").value = ""; $("send").disabled = false; }
-        })
-        .catch(function () { $("verdict").textContent = "전송 실패 — 채팅 ✍️ 버튼으로!"; $("send").disabled = false; });
-    }
-    $("send").addEventListener("click", submitGuess);
-    $("ans").addEventListener("keydown", function (e) { if (e.key === "Enter") submitGuess(); });
-  }
 </script>
 </body>
 </html>
